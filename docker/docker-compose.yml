@@ -1,0 +1,6 @@
+version: '2'
+services:
+  yacy_grid_crawler:
+    build: .
+    ports:
+      - 8300:8300
