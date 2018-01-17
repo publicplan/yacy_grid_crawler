@@ -179,7 +179,7 @@ public class Crawler {
         }
 
         @Override
-        public boolean processAction(SusiAction crawlaction, JSONArray data) {
+        public boolean processAction(SusiAction crawlaction, JSONArray data, String processName, int processNumber) {
             String id = crawlaction.getStringAttr("id");
             if (id == null || id.length() == 0) {
                 Data.logger.info("Crawler.processAction Fail: Action does not have an id: " + crawlaction.toString());
@@ -464,10 +464,10 @@ public class Crawler {
         }
     }
     
-    public static String getCrawlID(MultiProtocolURL url, Date date) {
+    public static String getCrawlID(MultiProtocolURL url, Date date, int count) {
         String id = url.getHost();
         if (id.length() > 80) id = id.substring(0, 80) + "-" + id.hashCode();
-        id = id + "-" + DateParser.secondDateFormat.format(date).replace(':', '-').replace(' ', '-');
+        id = id + "-" + DateParser.secondDateFormat.format(date).replace(':', '-').replace(' ', '-') + "-" + count;
         return id;
     }
     
