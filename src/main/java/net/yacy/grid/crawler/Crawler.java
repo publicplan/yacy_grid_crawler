@@ -20,21 +20,26 @@
 package net.yacy.grid.crawler;
 
 import java.io.ByteArrayInputStream;
+import java.io.File;
 import java.io.IOException;
 import java.net.MalformedURLException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Date;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 
 import javax.servlet.Servlet;
 
@@ -83,94 +88,32 @@ public class Crawler {
             WebMapping.iframes_sxt.name()
     };
     
-    private final static Map<String, Set<Integer>> doubles = new ConcurrentHashMap<>();
-    /**
-     * broker listener, takes process messages from the queue "crawler", "webcrawler"
-     * i.e. test with:
-     * curl -X POST -F "message=@job.json" -F "serviceName=crawler" -F "queueName=webcrawler" http://yacygrid.com:8100/yacy/grid/mcp/messages/send.json
-     * where job.json is:
-{
-  "metadata": {
-    "process": "yacy_grid_loader",
-    "count": 1
-  },
-  "data": [{
-    "id": "201705042045000-xyz",
-    "crawlingMode": "url",
-    "crawlingURL": "http://yacy.net",
-    "sitemapURL": "",
-    "crawlingFile": "",
-    "crawlingDepth": 3,
-    "crawlingDepthExtension": "",
-    "range": "domain",
-    "mustmatch": ".*",
-    "mustnotmatch": "",
-    "ipMustmatch": ".*",
-    "ipMustnotmatch": "",
-    "indexmustmatch": ".*",
-    "indexmustnotmatch": "",
-    "deleteold": "off",
-    "deleteIfOlderNumber": 0,
-    "deleteIfOlderUnit": "day",
-    "recrawl": "nodoubles",
-    "reloadIfOlderNumber": 0,
-    "reloadIfOlderUnit": "day",
-    "crawlingDomMaxCheck": "off",
-    "crawlingDomMaxPages": 1000,
-    "crawlingQ": "off",
-    "directDocByURL": "off",
-    "storeHTCache": "off",
-    "cachePolicy": "if fresh",
-    "indexText": "on",
-    "indexMedia": "off",
-    "xsstopw": "off",
-    "collection": "user",
-    "agentName": "yacybot (yacy.net; crawler from yacygrid.com)",
-    "user": "anonymous@nowhere.com",
-    "client": "yacygrid.com"
-  }],
-  "actions": [{
-    "type": "crawler",
-    "queue": "webcrawler",
-    "id": "201705042045000-xyz",
-    "depth": 1,
-    "sourcegraph": "test3/yacy.net.graph.json"
-  }]
-}
-
-{
-  "metadata": {
-    "process": "yacy_grid_parser",
-    "count": 1
-  },
-  "data": [{"collection": "test"}],
-  "actions": [{
-    "type": "loader",
-    "queue": "webloader",
-    "urls": ["http://yacy.net"],
-    "collection": "test",
-    "targetasset": "test3/yacy.net.warc.gz",
-    "actions": [{
-      "type": "parser",
-      "queue": "yacyparser",
-      "sourceasset": "test3/yacy.net.warc.gz",
-      "targetasset": "test3/yacy.net.jsonlist",
-      "targetgraph": "test3/yacy.net.graph.json"
-      "actions": [{
-        "type": "indexer",
-        "queue": "elasticsearch",
-        "sourceasset": "test3/yacy.net.jsonlist"
-      },{
-        "type": "crawler",
-        "queue": "webcrawler",
-        "sourceasset": "test3/yacy.net.graph.json"
-      },
-      ]
-    }]
-  }]
-}
-     */
+    private final static Map<String, DoubleCache> doubles = new ConcurrentHashMap<>();
+    private static long doublesLastCleanup = System.currentTimeMillis();
+    private final static long doublesCleanupTimeout = 1000L * 60L * 60L * 24L * 7L; // cleanup after 7 days
+    private final static long doublesCleanupPeriod = 1000L * 60L * 10L; // do cleanup each 10 minutes
+    private static class DoubleCache {
+        public Set<Integer> doubleHashes;
+        public long time;
+        public DoubleCache() {
+            this.time = System.currentTimeMillis();
+            this.doubleHashes = new ConcurrentHashSet<>();
+        }
+    }
     
+    private static void doDoubleCleanup() {
+        long now = System.currentTimeMillis();
+        if (now - doublesLastCleanup < doublesCleanupPeriod) return;
+        doublesLastCleanup = now;
+        Iterator<Map.Entry<String, DoubleCache>> i = doubles.entrySet().iterator();
+        while (i.hasNext()) {
+            Map.Entry<String, DoubleCache> cache = i.next();
+            if ((now - cache.getValue().time) > doublesCleanupTimeout) {
+                cache.getValue().doubleHashes.clear();
+                i.remove();
+            }
+        }
+    }
 
     public static class CrawlerListener extends AbstractBrokerListener implements BrokerListener {
 
@@ -180,6 +123,7 @@ public class Crawler {
 
         @Override
         public boolean processAction(SusiAction crawlaction, JSONArray data, String processName, int processNumber) {
+            doDoubleCleanup();
             String id = crawlaction.getStringAttr("id");
             if (id == null || id.length() == 0) {
                 Data.logger.info("Crawler.processAction Fail: Action does not have an id: " + crawlaction.toString());
@@ -264,8 +208,8 @@ public class Crawler {
                     }
 
                     // sort out doubles and apply filters
-                    if (!doubles.containsKey(id)) doubles.put(id, new ConcurrentHashSet<>());
-                    final Set<Integer> doubleset = doubles.get(id);
+                    if (!doubles.containsKey(id)) doubles.put(id, new DoubleCache());
+                    final DoubleCache doublecache = doubles.get(id);
                     graph.forEach(url -> {
                         ContentDomain cd = url.getContentDomainFromExt();
                         if (cd == ContentDomain.TEXT || cd == ContentDomain.ALL) {
@@ -273,10 +217,16 @@ public class Crawler {
                             String u = url.toNormalform(true);
                             if (mustmatch.matcher(u).matches() && !mustnotmatch.matcher(u).matches()) {
                                 Integer urlhash = url.hashCode();
-                                if (!doubleset.contains(urlhash)) {
-                                    doubleset.add(urlhash);
-                                    // add url to next stack
-                                    nextList.add(u);
+                                if (!doublecache.doubleHashes.contains(urlhash)) {
+                                    doublecache.doubleHashes.add(urlhash);
+                                    // finally check the blacklist
+                                    BlacklistInfo blacklistInfo = isBlacklistedCrawler(u);
+                                    if (blacklistInfo == null) {
+                                        // add url to next stack
+                                        nextList.add(u);
+                                    } else {
+                                        Data.logger.info("Crawler.processAction crawler blacklist pattern '" + blacklistInfo.pattern.toString() + "' removed url '" + u + "' from crawl list " + blacklistInfo.source + ":  " + blacklistInfo.info);
+                                    }
                                 }
                             }
                         }
@@ -290,7 +240,10 @@ public class Crawler {
                 indexNoIndex[0] = new ArrayList<>(); // for: index
                 indexNoIndex[1] = new ArrayList<>(); // for: no-Index
                 nextList.forEach(url -> {
-                    if (indexmustmatch.matcher(url).matches() && !indexmustnotmatch.matcher(url).matches()) {
+                    boolean indexConstratntFromCrawlProfil = indexmustmatch.matcher(url).matches() && !indexmustnotmatch.matcher(url).matches();
+                    BlacklistInfo blacklistInfo = isBlacklistedIndexer(url);
+                    boolean indexConstraintFromBlacklist = blacklistInfo == null;
+                    if (indexConstratntFromCrawlProfil && indexConstraintFromBlacklist) {
                         indexNoIndex[0].add(url);
                     } else {
                         indexNoIndex[1].add(url);
@@ -471,6 +424,80 @@ public class Crawler {
         return id;
     }
     
+    private static List<BlacklistInfo> blacklist_crawler = new ArrayList<>();
+    private static List<BlacklistInfo> blacklist_indexer = new ArrayList<>();
+    
+    private final static class BlacklistInfo {
+        public final Pattern pattern;
+        public final String source;
+        public final String info;
+        public BlacklistInfo(final String patternString, final String source, final String info) throws PatternSyntaxException {
+            this.pattern = Pattern.compile(patternString);
+            this.source = source;
+            this.info = info;
+        }
+    }
+
+    public static BlacklistInfo isBlacklistedCrawler(String url) {
+        for (BlacklistInfo bi: blacklist_crawler) {
+            if (bi.pattern.matcher(url).matches()) return bi;
+        }
+        return null;
+    }
+    
+    public static BlacklistInfo isBlacklistedIndexer(String url) {
+        for (BlacklistInfo bi: blacklist_indexer) {
+            if (bi.pattern.matcher(url).matches()) return bi;
+        }
+        return null;
+    }
+    
+    private static List<BlacklistInfo> loadBlacklists(String names) {
+        String[] names_list = names.split(",");
+        List<BlacklistInfo> blacklist = new ArrayList<>();
+        for (String name: names_list) {
+            File f = new File(Data.gridServicePath, "conf/" + name.trim());
+            if (!f.exists()) f = new File("conf/" + name.trim());
+            if (!f.exists()) continue;
+            try {
+                final AtomicInteger counter = new AtomicInteger(0);
+                Files.lines(f.toPath(), StandardCharsets.UTF_8).forEach(line -> {
+                    line = line.trim();
+                    int p = line.indexOf(" #");
+                    String info = "";
+                    if (p >= 0) {
+                        info = line.substring(p + 1).trim();
+                        line = line.substring(0, p);
+                    }
+                    line = line.trim();
+                    if (!line.isEmpty() && !line.startsWith("#")) {
+                        if (line.startsWith("host ")) {
+                            try {
+                                BlacklistInfo bi = new BlacklistInfo(".*?//" + line.substring(5).trim() + "/.*", name, info);
+                                blacklist.add(bi);
+                                counter.incrementAndGet();
+                            } catch (PatternSyntaxException e) {
+                                Data.logger.warn("regex for host in file " + name + " cannot be compiled: " + line.substring(5).trim());
+                            }
+                        } else {
+                            try {
+                                BlacklistInfo bi = new BlacklistInfo(line, name, info);
+                                blacklist.add(bi);
+                                counter.incrementAndGet();
+                            } catch (PatternSyntaxException e) {
+                                Data.logger.warn("regex for url in file " + name + " cannot be compiled: " + line);
+                            }
+                        }
+                    }
+                });
+                Data.logger.info("loaded " + counter.get() + " blacklist entries from file " + name);
+            } catch (IOException e) {
+                Data.logger.warn("", e);
+            }
+        }
+        return blacklist;
+    }
+    
     public static void main(String[] args) {
         // initialize environment variables
         List<Class<? extends Servlet>> services = new ArrayList<>();
@@ -482,9 +509,19 @@ public class Crawler {
         BrokerListener brokerListener = new CrawlerListener(CRAWLER_SERVICE);
         new Thread(brokerListener).start();
 
-        // start server
+        // initialize data
         Data.logger.info("started Crawler");
         Data.logger.info(new GitTool().toString());
+        
+        // read global blacklists
+        String grid_crawler_blacklist = Data.config.get("grid.crawler.blacklist");
+        blacklist_crawler = loadBlacklists(grid_crawler_blacklist);
+        Data.logger.info("loaded " + blacklist_crawler.size() + " blacklist entries for the crawler");
+        String grid_indexer_blacklist = Data.config.get("grid.indexer.blacklist");
+        blacklist_indexer = loadBlacklists(grid_indexer_blacklist);
+        Data.logger.info("loaded " + blacklist_indexer.size() + " blacklist entries for the indexer");
+        
+        // start server
         Service.runService(null);
         brokerListener.terminate();
     }
