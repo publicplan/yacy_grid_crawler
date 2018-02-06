@@ -63,6 +63,7 @@ import net.yacy.grid.mcp.Data;
 import net.yacy.grid.mcp.MCP;
 import net.yacy.grid.mcp.Service;
 import net.yacy.grid.tools.Classification.ContentDomain;
+import net.yacy.grid.tools.ConcurrentARC;
 import net.yacy.grid.tools.DateParser;
 import net.yacy.grid.tools.GitTool;
 import net.yacy.grid.tools.JSONList;
@@ -437,11 +438,22 @@ public class Crawler {
             this.info = info;
         }
     }
+    
+    private final static ConcurrentARC<String, BlacklistInfo> blacklistHitCache = new ConcurrentARC<>(100000, Runtime.getRuntime().availableProcessors());
+    private final static ConcurrentARC<String, Boolean> blacklistMissCache = new ConcurrentARC<>(100000, Runtime.getRuntime().availableProcessors());
 
     public static BlacklistInfo isBlacklistedCrawler(String url) {
+    	BlacklistInfo cachedBI = blacklistHitCache.get(url);
+    	if (cachedBI != null) return cachedBI;
+    	Boolean cachedMiss = blacklistMissCache.get(url);
+    	if (cachedMiss != null) return null;
         for (BlacklistInfo bi: blacklist_crawler) {
-            if (bi.pattern.matcher(url).matches()) return bi;
+            if (bi.pattern.matcher(url).matches()) {
+            	blacklistHitCache.put(url, bi);
+            	return bi;
+            }
         }
+        blacklistMissCache.put(url, Boolean.TRUE);
         return null;
     }
     
