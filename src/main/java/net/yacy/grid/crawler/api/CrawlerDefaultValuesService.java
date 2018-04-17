@@ -31,10 +31,10 @@ import net.yacy.grid.http.ServiceResponse;
 /**
  * 
  * Test URL:
- * http://localhost:8300/yacy/grid/crawler/defaultValues.json
+ * http://localhost:8200/yacy/grid/crawler/defaultValues.json
  * 
  * Test command:
- * curl http://localhost:8300/yacy/grid/crawler/defaultValues.json
+ * curl http://localhost:8200/yacy/grid/crawler/defaultValues.json
  */
 public class CrawlerDefaultValuesService extends ObjectAPIHandler implements APIHandler {
 
@@ -65,15 +65,11 @@ public class CrawlerDefaultValuesService extends ObjectAPIHandler implements API
         defaultValues.put("crawlingDomMaxCheck", "off");
         defaultValues.put("crawlingDomMaxPages", 1000);
         defaultValues.put("crawlingQ", "off");
-        defaultValues.put("directDocByURL", "off");
-        defaultValues.put("storeHTCache", "off");
         defaultValues.put("cachePolicy", "if fresh");
-        defaultValues.put("indexText", "on");
-        defaultValues.put("indexMedia", "off");
-        defaultValues.put("xsstopw", "off");
         defaultValues.put("collection", "user");
         defaultValues.put("agentName", "");
         defaultValues.put("priority", 0);
+        defaultValues.put("loaderHeadless", "true");
     }
     
     @Override

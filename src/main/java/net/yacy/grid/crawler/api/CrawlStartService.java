@@ -47,8 +47,9 @@ import net.yacy.grid.tools.MultiProtocolURL;
 /**
  * 
  * Test URL:
- * http://localhost:8300/yacy/grid/crawler/crawlStart.json?crawlingURL=yacy.net&indexmustnotmatch=.*Mitmachen.*&mustmatch=.*yacy.net.*
- * http://localhost:8300/yacy/grid/crawler/crawlStart.json?crawlingURL=ix.de&crawlingDepth=6&priority=true
+ * http://localhost:8200/yacy/grid/crawler/crawlStart.json?crawlingURL=yacy.net&indexmustnotmatch=.*Mitmachen.*&mustmatch=.*yacy.net.*
+ * http://localhost:8200/yacy/grid/crawler/crawlStart.json?crawlingURL=ix.de&crawlingDepth=6&priority=true
+ * http://localhost:8200/yacy/grid/crawler/crawlStart.json?crawlingURL=tagesschau.de&loaderHeadless=false
  */
 public class CrawlStartService extends ObjectAPIHandler implements APIHandler {
 
@@ -102,7 +103,7 @@ public class CrawlStartService extends ObjectAPIHandler implements APIHandler {
                         .put("depth", 0)
                         .put("sourcegraph", "rootasset");
                 SusiAction crawlAction = new SusiAction(action);
-                JSONObject graph = new JSONObject(true).put(WebMapping.canonical_s.getSolrFieldName(), url.toNormalform(true));
+                JSONObject graph = new JSONObject(true).put(WebMapping.canonical_s.getMapping().name(), url.toNormalform(true));
                 crawlAction.setJSONListAsset("rootasset", new JSONList().add(graph));
                 json.addAction(crawlAction);
                 allCrawlstarts.addAction(crawlAction);
