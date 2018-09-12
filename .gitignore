@@ -59,3 +59,5 @@ bin/log4j.properties
 bin/net/
 bin/org/
 
+config-crawler.properties
+log4j.properties

@@ -1,48 +1,21 @@
-FROM ubuntu:xenial
+FROM gradle:4.10-jdk8-alpine as builder
 MAINTAINER publicplan GmbH
+LABEL MAINTAINER="publicplan GmbH"
 
-# update
-RUN apt-get update
-RUN apt-get upgrade -y
-RUN apt-get update --fix-missing
+COPY --chown=gradle:gradle ./ /app/yacy_grid_crawler
+WORKDIR /app/yacy_grid_crawler
 
-# install debug tools
-RUN apt-get install -y vim
-RUN apt-get install -y curl
-RUN apt-get install -y net-tools dnsutils inetutils-tools inetutils-ping
+RUN gradle shadowJar && \
+    mkdir data/crawler-8300/conf/ -p && \
+    cp docker/config-crawler.properties data/crawler-8300/conf/config.properties
 
-# add packages
-RUN apt-get install -y git openjdk-8-jdk
+FROM openjdk:8-alpine as runner
 
-# install gradle required for build
-RUN apt-get update && apt-get install -y software-properties-common
-RUN add-apt-repository ppa:cwchien/gradle
-RUN apt-get update
-RUN apt-get install -y wget
-RUN wget https://services.gradle.org/distributions/gradle-3.4.1-bin.zip
-RUN mkdir /opt/gradle
-RUN apt-get install -y unzip
-RUN unzip -d /opt/gradle gradle-3.4.1-bin.zip
-RUN PATH=$PATH:/opt/gradle/gradle-3.4.1/bin
-ENV GRADLE_HOME=/opt/gradle/gradle-3.4.1
-ENV PATH=$PATH:$GRADLE_HOME/bin
-RUN gradle -v
+WORKDIR /app
 
-# change workdir
-ADD ./ /yacy_grid_crawler
-WORKDIR /yacy_grid_crawler
+COPY --from=builder /app/yacy_grid_crawler/build/libs/*.jar /app/yacy-grid-crawler.jar
+COPY --from=builder /app/yacy_grid_crawler/data /app/data
 
-# create log dir
-RUN mkdir -p log
-
-# compile
-RUN gradle build
-RUN mkdir data/crawler-8300/conf/ -p
-RUN cp docker/config-crawler.properties data/crawler-8300/conf/config.properties
-RUN chmod +x ./docker/start.sh
-
-# expose web interface ports
-EXPOSE 8300
-
-# Define default command.
-ENTRYPOINT ["/bin/bash", "./docker/start.sh"]
+EXPOSE 8100
+ENTRYPOINT ["java"]
+CMD ["-jar", "yacy-grid-crawler.jar"]
