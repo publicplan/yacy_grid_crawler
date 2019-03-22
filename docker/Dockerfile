@@ -6,10 +6,9 @@ COPY --chown=gradle:gradle ./ /app/yacy_grid_crawler
 WORKDIR /app/yacy_grid_crawler
 
 RUN docker/crawler_vsm_blacklist.sh /app/yacy_grid_crawler/conf/crawler_blacklist_vsm.txt && \
-    gradle shadowJar && \
+    gradle shadowJar --info && \
     mkdir -p data/crawler-8300/conf/ && \
-    cp -r conf/* data/crawler-8300/conf/ && \
-    cp -f docker/config-crawler.properties data/crawler-8300/conf/config.properties
+    cp -rf conf/* data/crawler-8300/conf/
 
 FROM openjdk:8-alpine as runner
 
