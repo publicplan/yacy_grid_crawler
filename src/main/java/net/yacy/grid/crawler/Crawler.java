@@ -29,6 +29,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
@@ -52,6 +53,7 @@ import net.yacy.grid.crawler.api.CrawlerDefaultValuesService;
 import net.yacy.grid.io.assets.Asset;
 import net.yacy.grid.io.index.CrawlerDocument;
 import net.yacy.grid.io.index.CrawlerDocument.Status;
+import net.yacy.grid.io.index.GridIndex;
 import net.yacy.grid.io.index.WebMapping;
 import net.yacy.grid.io.messages.GridQueue;
 import net.yacy.grid.io.messages.ShardingMethod;
@@ -89,11 +91,11 @@ public class Crawler {
         PARSER_PRIORITY_DIMENSIONS = priorityDimensions(YaCyServices.parser, priorityDimension);
         INDEXER_PRIORITY_DIMENSIONS = priorityDimensions(YaCyServices.indexer, priorityDimension);
     }
-    
+
     private static int[] priorityDimensions(YaCyServices service, int d) {
         return service.getQueues().length <= d ? new int[] {service.getQueues().length, 0} : new int[] {service.getQueues().length - d, d};
     }
-    
+
     // define services
     @SuppressWarnings("unchecked")
     public final static Class<? extends Servlet>[] CRAWLER_SERVICES = new Class[]{
@@ -108,7 +110,7 @@ public class Crawler {
             WebMapping.frames_sxt.name(),
             WebMapping.iframes_sxt.name()
     };
-    
+
     private final static Map<String, DoubleCache> doubles = new ConcurrentHashMap<>();
     private static long doublesLastCleanup = System.currentTimeMillis();
     private final static long doublesCleanupTimeout = 1000L * 60L * 60L * 24L * 7L; // cleanup after 7 days
@@ -121,7 +123,7 @@ public class Crawler {
             this.doubleHashes = ConcurrentHashMap.newKeySet();
         }
     }
-    
+
     private static void doDoubleCleanup() {
         long now = System.currentTimeMillis();
         if (now - doublesLastCleanup < doublesCleanupPeriod) return;
@@ -140,7 +142,7 @@ public class Crawler {
 
         private String[] blacklist_crawler_names_list, blacklist_indexer_names_list;
         private Map<String, Blacklist> blacklists_crawler, blacklists_indexer;
-        
+
         public CrawlerListener(YaCyServices service, String[] blacklist_crawler_names_list, String[] blacklist_indexer_names_list) {
             super(service, Runtime.getRuntime().availableProcessors());
             this.blacklist_crawler_names_list = blacklist_crawler_names_list;
@@ -165,7 +167,7 @@ public class Crawler {
             }
             return blacklist;
         }
-        
+
         private final Blacklist loadBlacklist(String[] names) {
             Blacklist blacklist = new Blacklist();
             for (String name: names) {
@@ -224,23 +226,31 @@ public class Crawler {
                     Data.logger.warn("Crawler.processAction could not read asset from storage: " + sourcegraph, e);
                     return false;
                 }
-                
+
                 // declare filter from the crawl profile
-                String mustmatchs = crawl.getString("mustmatch");
-                Pattern mustmatch = Pattern.compile(mustmatchs);
-                String mustnotmatchs = crawl.getString("mustnotmatch");
-                Pattern mustnotmatch = Pattern.compile(mustnotmatchs);
+                final String mustmatchs = crawl.optString("mustmatch");
+                final Pattern mustmatch = Pattern.compile(mustmatchs);
+                final String mustnotmatchs = crawl.optString("mustnotmatch");
+                final Pattern mustnotmatch = Pattern.compile(mustnotmatchs);
                 // filter for indexing steering
-                String indexmustmatchs = crawl.getString("indexmustmatch");
-                Pattern indexmustmatch = Pattern.compile(indexmustmatchs);
-                String indexmustnotmatchs = crawl.getString("indexmustnotmatch");
-                Pattern indexmustnotmatch = Pattern.compile(indexmustnotmatchs);
-                
+                final String indexmustmatchs = crawl.optString("indexmustmatch");
+                final Pattern indexmustmatch = Pattern.compile(indexmustmatchs);
+                final String indexmustnotmatchs = crawl.optString("indexmustnotmatch");
+                final Pattern indexmustnotmatch = Pattern.compile(indexmustnotmatchs);
+                // attributes for new crawl entries
+                final String collectionss = crawl.optString("collection");
+                final Map<String, Pattern> collections = WebMapping.collectionParser(collectionss);
+                final String start_url = crawl.optString("start_url");
+                final String start_ssld = crawl.optString("start_ssld");
+
+                final Date now = new Date();
+                final long timestamp = now.getTime();
                 // For each of the parsed document, there is a target graph.
                 // The graph contains all url elements which may appear in a document.
                 // In the following loop we collect all urls which may be of interest for the next depth of the crawl.
-                Set<String> nextList = new HashSet<>();
-                Blacklist blacklist_crawler = getBlacklistCrawler(processName, processNumber);
+                final Map<String, String> nextMap = new HashMap<>(); // a map from urlid to url
+                final Blacklist blacklist_crawler = getBlacklistCrawler(processName, processNumber);
+                final List<CrawlerDocument> crawlerDocuments = new ArrayList<>();
                 graphloop: for (int line = 0; line < jsonlist.length(); line++) {
                     JSONObject json = jsonlist.get(line);
                     if (json.has("index")) continue graphloop; // this is an elasticsearch index directive, we just skip that
@@ -273,100 +283,130 @@ public class Crawler {
                     final DoubleCache doublecache = doubles.get(crawlID);
                     Data.logger.info("Crawler.processAction processing sub-graph with " + graph.size() + " urls for url " + sourceurl);
                     urlcheck: for (MultiProtocolURL url: graph) {
+                        // prepare status document
                         ContentDomain cd = url.getContentDomainFromExt();
+
                         if (cd == ContentDomain.TEXT || cd == ContentDomain.ALL) {
                             // check if the url shall be loaded using the constraints
                             String u = url.toNormalform(true);
-                            
-                            // check matcher rules
-                            if (!mustmatch.matcher(u).matches() || mustnotmatch.matcher(u).matches()) {
-                                continue urlcheck;
-                            }
-                            
                             String urlid = Digest.encodeMD5Hex(u);
-                                
-                            // check with the fast double cache
+
+                            // double check with the fast double cache
                             if (doublecache.doubleHashes.contains(urlid)) {
                                 continue urlcheck;
                             }
                             doublecache.doubleHashes.add(urlid);
-                            
-                            // check blacklist
+
+                            // create new crawl status document
+                            CrawlerDocument crawlStatus = new CrawlerDocument()
+                                    .setCrawlID(crawlID)
+                                    .setMustmatch(mustmatchs)
+                                    .setCollections(collections.keySet())
+                                    .setCrawlstartURL(start_url)
+                                    .setCrawlstartSSLD(start_ssld)
+                                    .setInitDate(now)
+                                    .setStatusDate(now)
+                                    .setURL(u);
+
+                            // check matcher rules
+                            if (!mustmatch.matcher(u).matches() || mustnotmatch.matcher(u).matches()) {
+                                crawlStatus
+                                    .setStatus(Status.rejected)
+                                    .setComment(!mustmatch.matcher(u).matches() ? "url does not match must-match filter " + mustmatchs : "url matches mustnotmatch filter " + mustnotmatchs);
+                                crawlerDocuments.add(crawlStatus);
+                                continue urlcheck;
+                            }
+
+                            // check blacklist (this is costly because the blacklist is huge)
                             Blacklist.BlacklistInfo blacklistInfo = blacklist_crawler.isBlacklisted(u, url);
                             if (blacklistInfo != null) {
                                 Data.logger.info("Crawler.processAction crawler blacklist pattern '" + blacklistInfo.matcher.pattern().toString() + "' removed url '" + u + "' from crawl list " + blacklistInfo.source + ":  " + blacklistInfo.info);
-                            }
-
-                            // check with the elastic index
-                            if (Data.gridIndex.exist("crawler", "event", urlid)) {
+                                crawlStatus
+                                    .setStatus(Status.rejected)
+                                    .setComment("url matches blacklist");
+                                crawlerDocuments.add(crawlStatus);
                                 continue urlcheck;
                             }
-                                
+
+                            // double check with the elastic index (we do this late here because it is the most costly operation)
+                            //if (Data.gridIndex.exist(GridIndex.CRAWLER_INDEX_NAME, GridIndex.EVENT_TYPE_NAME, urlid)) {
+                            //    continue urlcheck;
+                            //}
+
                             // add url to next stack
-                            nextList.add(u);
+                            nextMap.put(urlid, u);
                         }
                     };
                     Data.logger.info("Crawler.processAction processed sub-graph " + ((line + 1)/2)  + "/" + jsonlist.length()/2 + " for url " + sourceurl);
                 }
 
-                // divide the nextList into two sub-lists, one which will reach the indexer and another one which will not cause indexing
-                @SuppressWarnings("unchecked")
-                List<String>[] indexNoIndex = new List[2];
-                indexNoIndex[0] = new ArrayList<>(); // for: index
-                indexNoIndex[1] = new ArrayList<>(); // for: no-Index
-                Blacklist blacklist_indexer = getBlacklistIndexer(processName, processNumber);
-                nextList.forEach(url -> {
-                    boolean indexConstratntFromCrawlProfil = indexmustmatch.matcher(url).matches() && !indexmustnotmatch.matcher(url).matches();
-                    Blacklist.BlacklistInfo blacklistInfo = blacklist_indexer.isBlacklisted(url, null);
-                    boolean indexConstraintFromBlacklist = blacklistInfo == null;
-                    if (indexConstratntFromCrawlProfil && indexConstraintFromBlacklist) {
-                        indexNoIndex[0].add(url);
-                    } else {
-                        indexNoIndex[1].add(url);
-                    }
-                });
+                if (!nextMap.isEmpty()) {
 
-                Date now = new Date();
-                long timestamp = now.getTime();
-                final Map<String, Pattern> collections = WebMapping.collectionParser(crawl.optString("collection"));
-                for (int ini = 0; ini < 2; ini++) {
+                    // make a double-check
+                    Set<String> exist = Data.gridIndex.existBulk(GridIndex.CRAWLER_INDEX_NAME, GridIndex.EVENT_TYPE_NAME, nextMap.keySet());
+                    for (String u: exist) nextMap.remove(u);
+                    Collection<String> nextList = nextMap.values(); // a set of urls
 
-                    // write crawler index entries
-                    for (String u: indexNoIndex[ini]) {
-                        CrawlerDocument crawlStatus = new CrawlerDocument()
-                            .setCrawlId(crawlID)
-                            .setURL(u)
-                            .setStatus(Status.created)
-                            .setInitDate(now)
-                            .setStatusDate(now)
-                            .setCollections(collections.keySet())
-                            .setComment("");
-                        String urlid = Digest.encodeMD5Hex(u);
-                        crawlStatus.store(Data.gridIndex, urlid);
-                    }
-                    
-                    // create partitions
-                    List<JSONArray> partitions = createPartition(indexNoIndex[ini], 4);
-
-                    // create follow-up crawl to next depth
-                    for (int pc = 0; pc < partitions.size(); pc++) {
-                        JSONObject loaderAction = newLoaderAction(priority, crawlID, partitions.get(pc), depth, 0, timestamp + ini, pc, depth < crawlingDepth, ini == 0); // action includes whole hierarchy of follow-up actions
-                        SusiThought nextjson = new SusiThought()
-                                .setData(data)
-                                .addAction(new SusiAction(loaderAction));
-
-                        // put a loader message on the queue
-                        String message = nextjson.toString(2);
-                        byte[] b = message.getBytes(StandardCharsets.UTF_8);
-                        try {
-                            Services serviceName = YaCyServices.valueOf(loaderAction.getString("type"));
-                            GridQueue queueName = new GridQueue(loaderAction.getString("queue"));
-                            Data.gridBroker.send(serviceName, queueName, b);
-                        } catch (IOException e) {
-                            Data.logger.warn("error when starting crawl with message " + message, e);
+                    // divide the nextList into two sub-lists, one which will reach the indexer and another one which will not cause indexing
+                    @SuppressWarnings("unchecked")
+                    List<String>[] indexNoIndex = new List[2];
+                    indexNoIndex[0] = new ArrayList<>(); // for: index
+                    indexNoIndex[1] = new ArrayList<>(); // for: no-Index
+                    Blacklist blacklist_indexer = getBlacklistIndexer(processName, processNumber);
+                    nextList.forEach(url -> {
+                        boolean indexConstratntFromCrawlProfil = indexmustmatch.matcher(url).matches() && !indexmustnotmatch.matcher(url).matches();
+                        Blacklist.BlacklistInfo blacklistInfo = blacklist_indexer.isBlacklisted(url, null);
+                        boolean indexConstraintFromBlacklist = blacklistInfo == null;
+                        if (indexConstratntFromCrawlProfil && indexConstraintFromBlacklist) {
+                            indexNoIndex[0].add(url);
+                        } else {
+                            indexNoIndex[1].add(url);
                         }
-                    };
+                    });
+
+                    for (int ini = 0; ini < 2; ini++) {
+
+                        // create crawler index entries
+                        for (String u: indexNoIndex[ini]) {
+                            CrawlerDocument crawlStatus = new CrawlerDocument()
+                                .setCrawlID(crawlID)
+                                .setMustmatch(mustmatchs)
+                                .setCollections(collections.keySet())
+                                .setCrawlstartURL(start_url)
+                                .setCrawlstartSSLD(start_ssld)
+                                .setInitDate(now)
+                                .setStatusDate(now)
+                                .setStatus(Status.accepted)
+                                .setURL(u)
+                                .setComment(ini == 0 ? "to be indexed" : "noindex, just for crawling");
+                            crawlerDocuments.add(crawlStatus);
+                        }
+
+                        // create partitions
+                        List<JSONArray> partitions = createPartition(indexNoIndex[ini], 4);
+
+                        // create follow-up crawl to next depth
+                        for (int pc = 0; pc < partitions.size(); pc++) {
+                            JSONObject loaderAction = newLoaderAction(priority, crawlID, partitions.get(pc), depth, 0, timestamp + ini, pc, depth < crawlingDepth, ini == 0); // action includes whole hierarchy of follow-up actions
+                            SusiThought nextjson = new SusiThought()
+                                    .setData(data)
+                                    .addAction(new SusiAction(loaderAction));
+
+                            // put a loader message on the queue
+                            String message = nextjson.toString(2);
+                            byte[] b = message.getBytes(StandardCharsets.UTF_8);
+                            try {
+                                Services serviceName = YaCyServices.valueOf(loaderAction.getString("type"));
+                                GridQueue queueName = new GridQueue(loaderAction.getString("queue"));
+                                Data.gridBroker.send(serviceName, queueName, b);
+                            } catch (IOException e) {
+                                Data.logger.warn("error when starting crawl with message " + message, e);
+                            }
+                        };
+                    }
                 }
+                // bulk-store the crawler documents
+                CrawlerDocument.storeBulk(Data.gridIndex, crawlerDocuments);
                 Data.logger.info("Crawler.processAction processed graph with " +  jsonlist.length()/2 + " subgraphs from " + sourcegraph);
                 return true;
             } catch (Throwable e) {
@@ -375,7 +415,7 @@ public class Crawler {
             }
         }
     }
-    
+
     private static List<JSONArray> createPartition(Collection<String> urls, int partitionSize) {
         List<JSONArray> partitions = new ArrayList<>();
         urls.forEach(url -> {
@@ -390,7 +430,7 @@ public class Crawler {
     }
 
     private final static String PATTERN_TIMEF = "MMddHHmmssSSS"; 
-    
+
     /**
      * Create a new loader action. This action contains all follow-up actions after
      * loading to create a steering of parser, indexing and follow-up crawler actions.
@@ -448,7 +488,7 @@ public class Crawler {
                 .put("sourcegraph", graphasset)
              );
         }
-        
+
         // bevor that and after loading we have a parsing action
         GridQueue parserQueueName = Data.gridBroker.queueName(YaCyServices.parser, YaCyServices.parser.getQueues(), ShardingMethod.BALANCE, PARSER_PRIORITY_DIMENSIONS, priority, hashKey);
         JSONArray parserActions = new JSONArray().put(new JSONObject(true)
@@ -459,7 +499,7 @@ public class Crawler {
                 .put("targetasset", webasset)
                 .put("targetgraph", graphasset)
                 .put("actions", postParserActions)); // actions after parsing
-        
+
         // at the beginning of the process, we do a loading.
         GridQueue loaderQueueName = Data.gridBroker.queueName(YaCyServices.loader, YaCyServices.loader.getQueues(), ShardingMethod.BALANCE, LOADER_PRIORITY_DIMENSIONS, priority, hashKey);
         JSONObject loaderAction = new JSONObject(true)
@@ -471,18 +511,18 @@ public class Crawler {
             .put("actions", parserActions); // actions after loading
         return loaderAction;
     }
-    
+
     private final static String intf(int i) {
        String s = Integer.toString(i);
        while (s.length() < 3) s = '0' + s;
        return s;
     }
-    
+
     public static class CrawlstartURLSplitter {
-        
+
         private List<MultiProtocolURL> crawlingURLArray;
         private List<String> badURLStrings;
-        
+
         public CrawlstartURLSplitter(String crawlingURLsString) {
             Data.logger.info("splitting url list: " + crawlingURLsString);
             crawlingURLsString = crawlingURLsString.replaceAll("\\|http", "\nhttp").replaceAll("%7Chttp", "\nhttp").replaceAll("%0D%0A", "\n").replaceAll("%0A", "\n").replaceAll("%0D", "\n").replaceAll(" ", "\n");
@@ -500,23 +540,23 @@ public class Crawler {
                 }
             }
         }
-        
+
         public List<MultiProtocolURL> getURLs() {
             return this.crawlingURLArray;
         }
-        
+
         public List<String> getBadURLs() {
             return this.badURLStrings;
         }
     }
-    
+
     public static String getCrawlID(MultiProtocolURL url, Date date, int count) {
         String id = url.getHost();
         if (id.length() > 80) id = id.substring(0, 80) + "-" + id.hashCode();
         id = id + "-" + DateParser.secondDateFormat.format(date).replace(':', '-').replace(' ', '-') + "-" + count;
         return id;
     }
-    
+
     public static void main(String[] args) {
         // initialize environment variables
         List<Class<? extends Servlet>> services = new ArrayList<>();
@@ -527,7 +567,7 @@ public class Crawler {
         // read global blacklists
         String[] grid_crawler_blacklist = Data.config.get("grid.crawler.blacklist").split(",");
         String[] grid_indexer_blacklist = Data.config.get("grid.indexer.blacklist").split(",");
-        
+
         // start listener
         BrokerListener brokerListener = new CrawlerListener(CRAWLER_SERVICE, grid_crawler_blacklist, grid_indexer_blacklist);
         new Thread(brokerListener).start();
@@ -535,11 +575,10 @@ public class Crawler {
         // initialize data
         Data.logger.info("started Crawler");
         Data.logger.info(new GitTool().toString());
-        
+
         int priorityQueues = Integer.parseInt(Data.config.get("grid.indexer.priorityQueues"));
         initPriorityQueue(priorityQueues);
-        
-        
+
         // start server
         Service.runService(null);
         brokerListener.terminate();
