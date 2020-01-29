@@ -344,7 +344,7 @@ public class Crawler {
                 if (!nextMap.isEmpty()) {
 
                     // make a double-check
-                    Set<String> exist = Data.gridIndex.existBulk(GridIndex.CRAWLER_INDEX_NAME, GridIndex.EVENT_TYPE_NAME, nextMap.keySet());
+                    Set<String> exist = Data.gridIndex.existBulk(GridIndex.CRAWLER_INDEX_NAME, nextMap.keySet());
                     for (String u: exist) nextMap.remove(u);
                     Collection<String> nextList = nextMap.values(); // a set of urls
 
@@ -407,7 +407,17 @@ public class Crawler {
                     }
                 }
                 // bulk-store the crawler documents
-                CrawlerDocument.storeBulk(Data.gridIndex, crawlerDocuments);
+                Map<String, CrawlerDocument> crawlerDocumentsMap = new HashMap<>();
+                crawlerDocuments.forEach(crawlerDocument -> {
+                    String url = crawlerDocument.getURL();
+                        if (url != null && url.length() > 0) {
+                            String id = Digest.encodeMD5Hex(url);
+                            crawlerDocumentsMap.put(id, crawlerDocument);
+                        } else {
+                            assert false : "url not set / storeBulk";
+                        }
+                });
+                CrawlerDocument.storeBulk(Data.gridIndex, crawlerDocumentsMap);
                 Data.logger.info("Crawler.processAction processed graph with " +  jsonlist.length()/2 + " subgraphs from " + sourcegraph);
                 return ActionResult.SUCCESS;
             } catch (Throwable e) {
