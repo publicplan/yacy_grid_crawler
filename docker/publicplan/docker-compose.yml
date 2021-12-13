@@ -1,6 +1,8 @@
 version: '2'
 services:
   yacy_grid_crawler:
-    build: .
+    build:
+      context: ../..
+      dockerfile: docker/publicplan/Dockerfile
     ports:
       - 8300:8300
