@@ -7,17 +7,25 @@
 
 # build app
 FROM adoptopenjdk/openjdk8:alpine AS appbuilder
+
 COPY ./ /app
+
 WORKDIR /app
+
 RUN ./gradlew assemble
 
 # build dist
 FROM adoptopenjdk/openjdk8:alpine
+
 LABEL maintainer="Michael Peter Christen <mc@yacy.net>"
-ENV DEBIAN_FRONTEND noninteractive
-ARG default_branch=master
+ENV JAVA_OPTS ""
+
 COPY ./conf /app/conf/
 COPY --from=appbuilder /app/build/libs/ ./app/build/libs/
+
 WORKDIR /app
+
 EXPOSE 8300
-CMD ["java", "-jar", "/app/build/libs/yacy_grid_crawler-0.0.1-SNAPSHOT-all.jar"]
+
+ENTRYPOINT ["/bin/sh"]
+CMD ["-c", "java $JAVA_OPTS -jar /app/build/libs/yacy_grid_crawler-0.0.1-SNAPSHOT-all.jar"]
