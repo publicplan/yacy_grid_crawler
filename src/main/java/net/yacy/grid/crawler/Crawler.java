@@ -6,12 +6,12 @@
  *  modify it under the terms of the GNU Lesser General Public
  *  License as published by the Free Software Foundation; either
  *  version 2.1 of the License, or (at your option) any later version.
- *  
+ *
  *  This library is distributed in the hope that it will be useful,
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  *  Lesser General Public License for more details.
- *  
+ *
  *  You should have received a copy of the GNU Lesser General Public License
  *  along with this program in the file lgpl21.txt
  *  If not, see <http://www.gnu.org/licenses/>.
@@ -22,6 +22,7 @@ package net.yacy.grid.crawler;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.Serializable;
 import java.net.MalformedURLException;
 import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
@@ -67,11 +68,12 @@ import net.yacy.grid.tools.DateParser;
 import net.yacy.grid.tools.Digest;
 import net.yacy.grid.tools.GitTool;
 import net.yacy.grid.tools.JSONList;
+import net.yacy.grid.tools.Logger;
 import net.yacy.grid.tools.MultiProtocolURL;
 
 /**
  * The Crawler main class
- * 
+ *
  * performance debugging:
  * http://localhost:8300/yacy/grid/mcp/info/threaddump.txt
  * http://localhost:8300/yacy/grid/mcp/info/threaddump.txt?count=100
@@ -84,7 +86,7 @@ public class Crawler {
     public static int[] LOADER_PRIORITY_DIMENSIONS = YaCyServices.loader.getSourceQueues().length == 1 ? new int[] {1, 0} : new int[] {YaCyServices.loader.getSourceQueues().length - 1, 1};
     public static int[] PARSER_PRIORITY_DIMENSIONS = YaCyServices.parser.getSourceQueues().length == 1 ? new int[] {1, 0} : new int[] {YaCyServices.parser.getSourceQueues().length - 1, 1};
     public static int[] INDEXER_PRIORITY_DIMENSIONS = YaCyServices.indexer.getSourceQueues().length == 1 ? new int[] {1, 0} : new int[] {YaCyServices.indexer.getSourceQueues().length - 1, 1};
- 
+
     public static void initPriorityQueue(int priorityDimension) {
         CRAWLER_PRIORITY_DIMENSIONS = priorityDimensions(YaCyServices.crawler, priorityDimension);
         LOADER_PRIORITY_DIMENSIONS = priorityDimensions(YaCyServices.loader, priorityDimension);
@@ -111,12 +113,13 @@ public class Crawler {
             WebMapping.iframes_sxt.name()
     };
 
-    // private final static Map<String, DoubleCache> doubles = Service.hazelcast.getMap("doubles");
-    private final static Map<String, DoubleCache> doubles = new ConcurrentHashMap<>();
+    //private final static Map<String, DoubleCache> doubles = Service.hazelcast.getMap("doubles");
+    private static Map<String, DoubleCache> doubles = new ConcurrentHashMap<>();
     private static long doublesLastCleanup = System.currentTimeMillis();
     private final static long doublesCleanupTimeout = 1000L * 60L * 60L * 24L * 7L; // cleanup after 7 days
     private final static long doublesCleanupPeriod = 1000L * 60L * 10L; // do cleanup each 10 minutes
-    private static class DoubleCache {
+    private static class DoubleCache implements Serializable {
+        private static final long serialVersionUID = 614262945713636851L;
         public Set<String> doubleHashes;
         public long time;
         public DoubleCache() {
@@ -154,7 +157,7 @@ public class Crawler {
 
         private final Blacklist getBlacklistCrawler(String processName, int processNumber) {
             String key = processName + "_" + processNumber;
-            Blacklist blacklist = blacklists_crawler.get(key);
+            Blacklist blacklist = this.blacklists_crawler.get(key);
             if (blacklist == null) {
                 this.blacklists_crawler.put(key, blacklist = loadBlacklist(this.blacklist_crawler_names_list));
             }
@@ -162,7 +165,7 @@ public class Crawler {
         }
         private final Blacklist getBlacklistIndexer(String processName, int processNumber) {
             String key = processName + "_" + processNumber;
-            Blacklist blacklist = blacklists_indexer.get(key);
+            Blacklist blacklist = this.blacklists_indexer.get(key);
             if (blacklist == null) {
                 this.blacklists_indexer.put(key, blacklist = loadBlacklist(this.blacklist_indexer_names_list));
             }
@@ -178,7 +181,7 @@ public class Crawler {
                 try {
                     blacklist.load(f);
                 } catch (IOException e) {
-                    Data.logger.warn("", e);
+                    Logger.warn(this.getClass(), e);
                 }
             }
             return blacklist;
@@ -189,12 +192,12 @@ public class Crawler {
             doDoubleCleanup();
             String crawlID = crawlaction.getStringAttr("id");
             if (crawlID == null || crawlID.length() == 0) {
-                Data.logger.info("Crawler.processAction Fail: Action does not have an id: " + crawlaction.toString());
+                Logger.info("Crawler.processAction Fail: Action does not have an id: " + crawlaction.toString());
                 return ActionResult.FAIL_IRREVERSIBLE;
             }
             JSONObject crawl = SusiThought.selectData(data, "id", crawlID);
             if (crawl == null) {
-                Data.logger.info("Crawler.processAction Fail: ID of Action not found in data: " + crawlaction.toString());
+                Logger.info(this.getClass(), "Crawler.processAction Fail: ID of Action not found in data: " + crawlaction.toString());
                 return ActionResult.FAIL_IRREVERSIBLE;
             }
 
@@ -204,7 +207,7 @@ public class Crawler {
             // check depth (this check should be deprecated because we limit by omitting the crawl message at crawl tree leaves)
             if (depth > crawlingDepth) {
                 // this is a leaf in the crawl tree (it does not mean that the crawl is finished)
-                Data.logger.info("Crawler.processAction Leaf: reached a crawl leaf for crawl " + crawlID + ", depth = " + crawlingDepth);
+                Logger.info(this.getClass(), "Crawler.processAction Leaf: reached a crawl leaf for crawl " + crawlID + ", depth = " + crawlingDepth);
                 return ActionResult.SUCCESS;
             }
             boolean isCrawlLeaf = depth == crawlingDepth;
@@ -212,7 +215,7 @@ public class Crawler {
             // load graph
             String sourcegraph = crawlaction.getStringAttr("sourcegraph");
             if (sourcegraph == null || sourcegraph.length() == 0) {
-                Data.logger.info("Crawler.processAction Fail: sourcegraph of Action is empty: " + crawlaction.toString());
+                Logger.info(this.getClass(), "Crawler.processAction Fail: sourcegraph of Action is empty: " + crawlaction.toString());
                 return ActionResult.FAIL_IRREVERSIBLE;
             }
             try {
@@ -225,7 +228,7 @@ public class Crawler {
                     byte[] graphassetbytes = graphasset.getPayload();
                     jsonlist = new JSONList(new ByteArrayInputStream(graphassetbytes));
                 } catch (IOException e) {
-                    Data.logger.warn("Crawler.processAction could not read asset from storage: " + sourcegraph, e);
+                    Logger.warn(this.getClass(), "Crawler.processAction could not read asset from storage: " + sourcegraph, e);
                     return ActionResult.FAIL_IRREVERSIBLE;
                 }
 
@@ -263,7 +266,7 @@ public class Crawler {
                     if (graphurl != null) try {
                         graph.add(new MultiProtocolURL(graphurl));
                     } catch (MalformedURLException e) {
-                        Data.logger.warn("Crawler.processAction error when starting crawl with canonical url " + graphurl, e);
+                        Logger.warn(this.getClass(), "Crawler.processAction error when starting crawl with canonical url " + graphurl, e);
                     }
                     for (String field: FIELDS_IN_GRAPH) {
                         if (json.has(field)) {
@@ -273,7 +276,7 @@ public class Crawler {
                                 try {
                                     graph.add(new MultiProtocolURL(u));
                                 } catch (MalformedURLException e) {
-                                    Data.logger.warn("Crawler.processAction we discovered a bad follow-up url: " + u, e);
+                                    Logger.warn(this.getClass(), "Crawler.processAction we discovered a bad follow-up url: " + u, e);
                                     continue urlloop;
                                 }
                             }
@@ -283,7 +286,7 @@ public class Crawler {
                     // sort out doubles and apply filters
                     if (!doubles.containsKey(crawlID)) doubles.put(crawlID, new DoubleCache());
                     final DoubleCache doublecache = doubles.get(crawlID);
-                    Data.logger.info("Crawler.processAction processing sub-graph with " + graph.size() + " urls for url " + sourceurl);
+                    Logger.info(this.getClass(), "Crawler.processAction processing sub-graph with " + graph.size() + " urls for url " + sourceurl);
                     urlcheck: for (MultiProtocolURL url: graph) {
                         // prepare status document
                         ContentDomain cd = url.getContentDomainFromExt();
@@ -322,7 +325,7 @@ public class Crawler {
                             // check blacklist (this is costly because the blacklist is huge)
                             Blacklist.BlacklistInfo blacklistInfo = blacklist_crawler.isBlacklisted(u, url);
                             if (blacklistInfo != null) {
-                                Data.logger.info("Crawler.processAction crawler blacklist pattern '" + blacklistInfo.matcher.pattern().toString() + "' removed url '" + u + "' from crawl list " + blacklistInfo.source + ":  " + blacklistInfo.info);
+                                Logger.info(this.getClass(), "Crawler.processAction crawler blacklist pattern '" + blacklistInfo.matcher.pattern().toString() + "' removed url '" + u + "' from crawl list " + blacklistInfo.source + ":  " + blacklistInfo.info);
                                 crawlStatus
                                     .setStatus(Status.rejected)
                                     .setComment("url matches blacklist");
@@ -339,7 +342,7 @@ public class Crawler {
                             nextMap.put(urlid, u);
                         }
                     };
-                    Data.logger.info("Crawler.processAction processed sub-graph " + ((line + 1)/2)  + "/" + jsonlist.length()/2 + " for url " + sourceurl);
+                    Logger.info(this.getClass(), "Crawler.processAction processed sub-graph " + ((line + 1)/2)  + "/" + jsonlist.length()/2 + " for url " + sourceurl);
                 }
 
                 if (!nextMap.isEmpty()) {
@@ -403,7 +406,7 @@ public class Crawler {
                                 GridQueue queueName = new GridQueue(loaderAction.getString("queue"));
                                 Data.gridBroker.send(serviceName, queueName, b);
                             } catch (IOException e) {
-                                Data.logger.warn("error when starting crawl with message " + message, e);
+                                Logger.warn(this.getClass(), "error when starting crawl with message " + message, e);
                             }
                         };
                     }
@@ -420,10 +423,10 @@ public class Crawler {
                         }
                 });
                 CrawlerDocument.storeBulk(Data.gridIndex, crawlerDocumentsMap);
-                Data.logger.info("Crawler.processAction processed graph with " +  jsonlist.length()/2 + " subgraphs from " + sourcegraph);
+                Logger.info(this.getClass(), "Crawler.processAction processed graph with " +  jsonlist.length()/2 + " subgraphs from " + sourcegraph);
                 return ActionResult.SUCCESS;
             } catch (Throwable e) {
-                Data.logger.info("Crawler.processAction Fail: loading of sourcegraph failed: " + e.getMessage() /*+ "\n" + crawlaction.toString()*/, e);
+                Logger.warn(this.getClass(), "Crawler.processAction Fail: loading of sourcegraph failed: " + e.getMessage() /*+ "\n" + crawlaction.toString()*/, e);
                 return ActionResult.FAIL_IRREVERSIBLE;
             }
         }
@@ -442,7 +445,7 @@ public class Crawler {
         return partitions;
     }
 
-    private final static String PATTERN_TIMEF = "MMddHHmmssSSS"; 
+    private final static String PATTERN_TIMEF = "MMddHHmmssSSS";
 
     /**
      * Create a new loader action. This action contains all follow-up actions after
@@ -538,7 +541,7 @@ public class Crawler {
         private List<String> badURLStrings;
 
         public CrawlstartURLSplitter(String crawlingURLsString) {
-            Data.logger.info("splitting url list: " + crawlingURLsString);
+            Logger.info(this.getClass(), "splitting url list: " + crawlingURLsString);
             crawlingURLsString = crawlingURLsString.replaceAll("\\|http", "\nhttp").replaceAll("%7Chttp", "\nhttp").replaceAll("%0D%0A", "\n").replaceAll("%0A", "\n").replaceAll("%0D", "\n").replaceAll(" ", "\n");
             String[] crawlingURLs = crawlingURLsString.split("\n");
             this.crawlingURLArray = new ArrayList<>();
@@ -546,11 +549,11 @@ public class Crawler {
             for (String u: crawlingURLs) {
                 try {
                     MultiProtocolURL url = new MultiProtocolURL(u);
-                    Data.logger.info("splitted url: " + url.toNormalform(true));
+                    Logger.info(this.getClass(), "splitted url: " + url.toNormalform(true));
                     this.crawlingURLArray.add(url);
                 } catch (MalformedURLException e) {
                     this.badURLStrings.add(u);
-                    Data.logger.warn("error when starting crawl with splitter url " + u + "; splitted from " + crawlingURLsString, e);
+                    Logger.warn(this.getClass(), "error when starting crawl with splitter url " + u + "; splitted from " + crawlingURLsString, e);
                 }
             }
         }
@@ -577,6 +580,7 @@ public class Crawler {
         services.addAll(Arrays.asList(MCP.MCP_SERVICES));
         services.addAll(Arrays.asList(CRAWLER_SERVICES));
         Service.initEnvironment(CRAWLER_SERVICE, services, DATA_PATH, false);
+        doubles = Service.hazelcast.getMap("doubles");
 
         // read global blacklists
         String[] grid_crawler_blacklist = Data.config.get("grid.crawler.blacklist").split(",");
@@ -587,8 +591,8 @@ public class Crawler {
         new Thread(brokerListener).start();
 
         // initialize data
-        Data.logger.info("started Crawler");
-        Data.logger.info(new GitTool().toString());
+        Logger.info("started Crawler");
+        Logger.info(new GitTool().toString());
 
         int priorityQueues = Integer.parseInt(Data.config.get("grid.indexer.priorityQueues"));
         initPriorityQueue(priorityQueues);
