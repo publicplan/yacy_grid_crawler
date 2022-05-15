@@ -36,6 +36,13 @@ repositories {
      mavenCentral()
 }
 
+run {
+    jvmArgs = [
+        '-Dhazelcast.config=./conf/hazelcast.yaml',
+        '-Dhazelcast.diagnostics.enabled=true'
+    ];
+}
+
 jar {
     manifest {
         attributes 'Main-Class': 'net.yacy.grid.crawler.Crawler'
@@ -48,7 +55,7 @@ shadowJar {
 }
 
 dependencies {
-    implementation 'com.hazelcast:hazelcast:4.2.+'
+    implementation 'com.hazelcast:hazelcast:5.1.+'
     implementation 'com.rabbitmq:amqp-client:5.14.+'
     implementation 'commons-net:commons-net:3.+'
     implementation 'io.minio:minio:8.3.+'
