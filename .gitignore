@@ -58,6 +58,12 @@ bin/ai/
 bin/log4j.properties
 bin/net/
 bin/org/
+*.log
 
 config-crawler.properties
 log4j.properties
+
+
+# nix direnv setup #
+####################
+.direnv/
