@@ -379,73 +379,54 @@ public class CrawlerListener extends AbstractBrokerListener implements BrokerLis
                 };
             }
 
-            if (!nextMap.isEmpty()) {
+            if (nextMap.isEmpty()) {
+                return ActionResult.SUCCESS;
+            }
 
-                // make a double-check
-                final String crawlerIndexName = super.config.properties.getOrDefault("grid.elasticsearch.indexName.crawler", GridIndex.DEFAULT_INDEXNAME_CRAWLER);
-                final Set<String> exist = super.config.gridIndex.existBulk(crawlerIndexName, nextMap.keySet());
-                for (final String u: exist) nextMap.remove(u);
-                final Collection<String> nextList = nextMap.values(); // a set of urls
+            // make a double-check
+            final String crawlerIndexName = super.config.properties.getOrDefault("grid.elasticsearch.indexName.crawler", GridIndex.DEFAULT_INDEXNAME_CRAWLER);
+            final Set<String> exist = super.config.gridIndex.existBulk(crawlerIndexName, nextMap.keySet());
+            for (final String u: exist) {
+                nextMap.remove(u);
+            }
+            final Collection<String> nextList = nextMap.values(); // a set of urls
 
-                // divide the nextList into two sub-lists, one which will reach the indexer and another one which will not cause indexing
-                @SuppressWarnings("unchecked")
-                final
-                List<String>[] indexNoIndex = new List[2];
-                indexNoIndex[0] = new ArrayList<>(); // for: index
-                indexNoIndex[1] = new ArrayList<>(); // for: no-Index
-                final Blacklist blacklist_indexer = getBlacklistIndexer(processName, processNumber);
-                nextList.forEach(url -> {
-                    final boolean indexConstratntFromCrawlProfil = indexmustmatch.matcher(url).matches() && !indexmustnotmatch.matcher(url).matches();
-                    final Blacklist.BlacklistInfo blacklistInfo = blacklist_indexer.isBlacklisted(url, null);
-                    final boolean indexConstraintFromBlacklist = blacklistInfo == null;
-                    if (indexConstratntFromCrawlProfil && indexConstraintFromBlacklist) {
-                        indexNoIndex[0].add(url);
-                    } else {
-                        indexNoIndex[1].add(url);
-                    }
-                });
+            // divide the nextList into two sub-lists, one which will reach the indexer and another one which will not cause indexing
+            @SuppressWarnings("unchecked")
+            final
+            List<String>[] indexNoIndex = new List[2];
+            indexNoIndex[0] = new ArrayList<>(); // for: index
+            indexNoIndex[1] = new ArrayList<>(); // for: no-Index
+            final Blacklist blacklist_indexer = getBlacklistIndexer(processName, processNumber);
+            nextList.forEach(url -> {
+                final boolean indexConstratntFromCrawlProfil = indexmustmatch.matcher(url).matches() && !indexmustnotmatch.matcher(url).matches();
+                final Blacklist.BlacklistInfo blacklistInfo = blacklist_indexer.isBlacklisted(url, null);
+                final boolean indexConstraintFromBlacklist = blacklistInfo == null;
+                if (indexConstratntFromCrawlProfil && indexConstraintFromBlacklist) {
+                    indexNoIndex[0].add(url);
+                } else {
+                    indexNoIndex[1].add(url);
+                }
+            });
 
-                for (int ini = 0; ini < 2; ini++) {
-
-                    // create crawler index entries
-                    for (final String u: indexNoIndex[ini]) {
-                        final CrawlerDocument crawlStatus = new CrawlerDocument()
-                            .setCrawlID(crawlID)
-                            .setMustmatch(mustmatchs)
-                            .setCollections(collections.keySet())
-                            .setCrawlstartURL(start_url)
-                            .setCrawlstartSSLD(start_ssld)
-                            .setInitDate(now)
-                            .setStatusDate(now)
-                            .setStatus(Status.accepted)
-                            .setURL(u)
-                            .setComment(ini == 0 ? "to be indexed" : "noindex, just for crawling");
-                        crawlerDocuments.add(crawlStatus);
-                    }
-
-                    // create partitions
-                    final List<JSONArray> partitions = createPartition(indexNoIndex[ini], 4);
-
-                    // create follow-up crawl to next depth
-                    for (int pc = 0; pc < partitions.size(); pc++) {
-                        final JSONObject loaderAction = newLoaderAction(priority, crawlID, partitions.get(pc), depth, isCrawlLeaf, 0, timestamp + ini, pc, depth < crawlingDepth, ini == 0); // action includes whole hierarchy of follow-up actions
-                        final SusiThought nextjson = new SusiThought()
-                                .setData(data)
-                                .addAction(new SusiAction(loaderAction));
-
-                        // put a loader message on the queue
-                        final String message = nextjson.toString(2);
-                        final byte[] b = message.getBytes(StandardCharsets.UTF_8);
-                        try {
-                            final Services serviceName = YaCyServices.valueOf(loaderAction.getString("type"));
-                            final GridQueue queueName = new GridQueue(loaderAction.getString("queue"));
-                            super.config.gridBroker.send(serviceName, queueName, b);
-                        } catch (final IOException e) {
-                            Logger.warn(this.getClass(), "error when starting crawl with message " + message, e);
-                        }
-                    };
+            for (int ini = 0; ini < 2; ini++) {
+                // create crawler index entries
+                for (final String u: indexNoIndex[ini]) {
+                    final CrawlerDocument crawlStatus = new CrawlerDocument()
+                        .setCrawlID(crawlID)
+                        .setMustmatch(mustmatchs)
+                        .setCollections(collections.keySet())
+                        .setCrawlstartURL(start_url)
+                        .setCrawlstartSSLD(start_ssld)
+                        .setInitDate(now)
+                        .setStatusDate(now)
+                        .setStatus(Status.accepted)
+                        .setURL(u)
+                        .setComment(ini == 0 ? "to be indexed" : "noindex, just for crawling");
+                    crawlerDocuments.add(crawlStatus);
                 }
             }
+
             // bulk-store the crawler documents
             final Map<String, CrawlerDocument> crawlerDocumentsMap = new HashMap<>();
             crawlerDocuments.forEach(crawlerDocument -> {
@@ -459,6 +440,31 @@ public class CrawlerListener extends AbstractBrokerListener implements BrokerLis
             });
             CrawlerDocument.storeBulk(super.config, super.config.gridIndex, crawlerDocumentsMap);
             Logger.info(this.getClass(), "Crawler.processAction processed graph with " +  jsonlist.length()/2 + " subgraphs from " + sourcegraph);
+
+            for (int ini = 0; ini < 2; ini++) {
+                // create partitions
+                final List<JSONArray> partitions = createPartition(indexNoIndex[ini], 4);
+
+                // create follow-up crawl to next depth
+                for (int pc = 0; pc < partitions.size(); pc++) {
+                    final JSONObject loaderAction = newLoaderAction(priority, crawlID, partitions.get(pc), depth, isCrawlLeaf, 0, timestamp + ini, pc, depth < crawlingDepth, ini == 0); // action includes whole hierarchy of follow-up actions
+                    final SusiThought nextjson = new SusiThought()
+                            .setData(data)
+                            .addAction(new SusiAction(loaderAction));
+
+                    // put a loader message on the queue
+                    final String message = nextjson.toString(2);
+                    final byte[] b = message.getBytes(StandardCharsets.UTF_8);
+                    try {
+                        final Services serviceName = YaCyServices.valueOf(loaderAction.getString("type"));
+                        final GridQueue queueName = new GridQueue(loaderAction.getString("queue"));
+                        super.config.gridBroker.send(serviceName, queueName, b);
+                    } catch (final IOException e) {
+                        Logger.warn(this.getClass(), "error when starting crawl with message " + message, e);
+                    }
+                };
+            }
+
             return ActionResult.SUCCESS;
         } catch (final Throwable e) {
             Logger.warn(this.getClass(), "Crawler.processAction Fail: loading of sourcegraph failed: " + e.getMessage() /*+ "\n" + crawlaction.toString()*/, e);
