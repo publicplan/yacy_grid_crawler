@@ -167,7 +167,7 @@ public class CrawlStartService extends ObjectAPIHandler implements APIHandler {
                     // this should fit exactly on the old urls
                     // test url:
                     // curl -s -H 'Content-Type: application/json' -X GET http://localhost:9200/crawler/_search?q=_id:0a800a8ec1cc76b5eb8412ec494babc9 | python3 -m json.tool
-                    final String deletequery = "{ \"" + CrawlerMapping.mustmatch_s.name() + "\":\"" + mustmatch.replace("\\", "\\\\") + "\"}";
+                    final String deletequery = "{ \"" + CrawlerMapping.mustmatch_s.name() + "\":\"" + mustmatch.replace("\\", "\\\\\\\\") + "\"}";
                     deleted = Service.instance.config.gridIndex.delete(crawlerIndexName, QueryLanguage.fields, deletequery);
                     Logger.info(this.getClass(), "deleted " + deleted + " old crawl index entries");
                 }
