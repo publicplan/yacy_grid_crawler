@@ -145,32 +145,9 @@ public class CrawlStartService extends ObjectAPIHandler implements APIHandler {
                 long deleted = Service.instance.config.gridIndex.delete(crawlerIndexName, QueryLanguage.fields, "{ \"_id\":\"" + urlid + "\"}");
                 Logger.info(this.getClass(), "deleted " + deleted + " old crawl index entries for _id");
 
-                // Because 'old' crawls may block new ones we identify possible blocking entries using the mustmatch pattern.
-                // We therefore delete all entries with the same mustmatch pattern before a crawl starts.
-                if (mustmatch.equals(".*")) {
-                    // we cannot delete all wide crawl status urls!
-                    final JSONList old_crawls = Service.instance.config.gridIndex.query(crawlstartIndexName, QueryLanguage.fields, "{ \"" + CrawlstartMapping.start_url_s.name() + "\":\"" + start_url + "\"}", 0, 100);
-                    // from there we pick out the crawl start id and delete using them
-                    for (final Object j: old_crawls.toArray()) {
-                        final String crawlid = ((JSONObject) j).optString(CrawlstartMapping.crawl_id_s.name());
-                        if (crawlid.length() > 0) {
-                            deleted = Service.instance.config.gridIndex.delete(crawlerIndexName, QueryLanguage.fields, "{ \"" + CrawlerMapping.crawl_id_s.name() + "\":\"" + crawlid + "\"}");
-                            Logger.info(this.getClass(), "deleted " + deleted + " old crawl index entries for crawl_id_s");
-                        }
-                    }
-                    // we also delete all entries with same start_url and start_ssld
-                    deleted = Service.instance.config.gridIndex.delete(crawlerIndexName, QueryLanguage.fields, "{ \"" + CrawlerMapping.start_url_s.name() + "\":\"" + start_url + "\"}");
-                    Logger.info(this.getClass(), "deleted " + deleted + " old crawl index entries for start_url_s");
-                    deleted = Service.instance.config.gridIndex.delete(crawlerIndexName, QueryLanguage.fields, "{ \"" + CrawlerMapping.start_ssld_s.name() + "\":\"" + start_ssld + "\"}");
-                    Logger.info(this.getClass(), "deleted " + deleted + " old crawl index entries for start_ssld_s");
-                } else {
-                    // this should fit exactly on the old urls
-                    // test url:
-                    // curl -s -H 'Content-Type: application/json' -X GET http://localhost:9200/crawler/_search?q=_id:0a800a8ec1cc76b5eb8412ec494babc9 | python3 -m json.tool
-                    final String collectionForDeleteCache = collections.entrySet().iterator().next().getKey();
-                    deleted = Service.instance.config.gridIndex.delete(crawlerIndexName, QueryLanguage.fields, "{ \"" + CrawlerMapping.collection_sxt.name() + "\":\"" + collectionForDeleteCache + "\"}");
-                    Logger.info(this.getClass(), "deleted " + deleted + " old crawl index entries");
-                }
+                // Because 'old' crawls may block new ones we identify possible blocking entries by start_url
+                deleted = Service.instance.config.gridIndex.delete(crawlerIndexName, QueryLanguage.fields, "{ \"" + CrawlerMapping.start_url_s.name() + "\":\"" + start_url + "\"}");
+                Logger.info(this.getClass(), "deleted " + deleted + " old crawl index entries for start_url_s");
                 // we do not create a crawler document entry here because that would conflict with the double check.
                 // crawler documents must be written after the double check has happened.
 
