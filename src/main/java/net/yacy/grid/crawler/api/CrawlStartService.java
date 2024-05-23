@@ -146,7 +146,7 @@ public class CrawlStartService extends ObjectAPIHandler implements APIHandler {
                 Logger.info(this.getClass(), "deleted " + deleted + " old crawl index entries for _id");
 
                 // Because 'old' crawls may block new ones we identify possible blocking entries by start_url
-                deleted = Service.instance.config.gridIndex.delete(crawlerIndexName, QueryLanguage.fields, "{ \"" + CrawlerMapping.start_url_s.name() + "\":\"" + start_url + "\"}");
+                deleted = Service.instance.config.gridIndex.delete(crawlerIndexName, QueryLanguage.fields, "{ \"" + CrawlerMapping.start_url_s.name() + ".keyword\":\"" + start_url + "\"}");
                 Logger.info(this.getClass(), "deleted " + deleted + " old crawl index entries for start_url_s");
                 // we do not create a crawler document entry here because that would conflict with the double check.
                 // crawler documents must be written after the double check has happened.
