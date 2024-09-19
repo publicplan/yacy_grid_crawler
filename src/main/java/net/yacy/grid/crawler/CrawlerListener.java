@@ -336,6 +336,20 @@ public class CrawlerListener extends AbstractBrokerListener implements BrokerLis
                         }
                         doublecache.doubleHashes.add(urlid);
 
+                        // don't overwrite existing url's from another collection
+                        if (!mustmatch.matcher(u).matches() || mustnotmatch.matcher(u).matches()) {
+                            try {
+                                CrawlerDocument existingCrawlerDocument = CrawlerDocument.load(super.config, super.config.gridIndex, urlid);
+                                if (urlid.equals(existingCrawlerDocument.get("id")) && !Status.rejected.name().equals(existingCrawlerDocument.get("status_s"))) {
+                                    continue urlcheck;
+                                }
+                            } catch (final java.io.IOException e) {
+                                if (!e.getMessage().startsWith("no document")) {
+                                    Logger.warn(this.getClass(), "error by checking overlapping urls with url " + u, e);
+                                }
+                            }
+                        }
+
                         // create new crawl status document
                         final CrawlerDocument crawlStatus = new CrawlerDocument()
                                 .setCrawlID(crawlID)
